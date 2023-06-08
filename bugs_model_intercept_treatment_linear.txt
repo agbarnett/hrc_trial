@@ -1,0 +1,42 @@
+model
+{
+  for(i in 1:N){
+      log_counts[i,1:C] ~ dmnorm(mu[i,1:C], Omega[1:C, 1:C])
+      trt[i] <- (lambda*years_since[i] + gamma)*treatment[i]
+      control[i] <- (delta*years_since[i])*(1-treatment[i])
+      standard[i] <- int + r_int_c[person[i]] + trt[i] + control[i] + eta*last_year[i]
+      for(j in 1:C){
+        mu[i,j] <- alpha_c[j] + beta*baseline[i,j] + standard[i]
+      }
+      baseline[i,1:C] ~ dmnorm(zeros[1:C], Omega.b[1:C, 1:C]) # for missing
+  }
+  # priors
+  int ~ dnorm(0, 0.0001)
+  beta ~ dnorm(0, 0.0001)
+  gamma ~ dnorm(0, 0.0001)
+  lambda ~ dnorm(0, 0.0001)
+  delta ~ dnorm(0, 0.0001)
+  eta ~ dnorm(0, 0.0001)
+  # random intercept for each researcher
+  for(j in 1:P){
+    r_int[j] ~ dnorm(0, tau.person)
+    r_int_c[j] <- r_int[j] - mean.person
+  }
+  mean.person <- mean(r_int[1:P])
+  tau.person ~ dgamma(0.1, 0.1)
+  # random intercept for each database
+  for(j in 1:C){
+    alpha[j] ~ dnorm(0, 0.0001)
+    alpha_c[j] <- alpha[j] - mean.alpha # centre
+  }
+  mean.alpha <- mean(alpha[1:C])
+  # correlated errors
+  Omega.b[1:C, 1:C] ~ dwish(R[1:C, 1:C], C) # for missing baseline
+  Omega[1:C, 1:C] ~ dwish(R[1:C, 1:C], C)
+  Sigma[1:C, 1:C] <- inverse(Omega[1:C, 1:C])
+  # treatment difference (years since is centred at 2)
+  for (k in 1:T){
+     diff[k] <- (lambda*(k-2) + gamma) - (delta*(k-2))
+  }
+
+}

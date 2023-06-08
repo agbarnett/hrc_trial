@@ -1,0 +1,15 @@
+model
+{
+  for(i in 1:N){
+      diff[i] ~ dnorm(mu[i], tau)
+      mu[i] <- alpha + beta*consent[i] + random[number[i]]
+  }
+  for(j in 1:M){ # random intercept
+    random[j] ~ dnorm(0, tau.random)
+  }
+  # priors
+  tau.random ~ dgamma(0.1, 0.1)
+  tau ~ dgamma(0.1, 0.1)
+  alpha ~ dnorm(0, 0.0001)
+  beta ~ dnorm(0, 0.0001)
+}

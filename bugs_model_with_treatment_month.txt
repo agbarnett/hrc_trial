@@ -1,0 +1,29 @@
+model
+{
+  for(i in 1:N){
+      log_counts[i,1:C] ~ dmnorm(mu[i,1:C], Omega[1:C, 1:C])
+      standard[i] <- int + calendar[year[i]] + gamma*treatment[i] + zeta*january[i]
+      for(j in 1:C){
+        mu[i,j] <- alpha_c[j] + beta*baseline[i,j] + standard[i]
+      }
+      baseline[i,1:C] ~ dmnorm(zeros[1:C], Omega.b[1:C, 1:C]) # for missing
+  }
+  # priors
+  int ~ dnorm(0, 0.0001)
+  beta ~ dnorm(0, 0.0001)
+  zeta ~ dnorm(0, 0.0001)
+  gamma ~ dnorm(0, 0.0001)
+  # random intercept for each database
+  for(j in 1:C){
+    alpha[j] ~ dnorm(0, 0.0001)
+    alpha_c[j] <- alpha[j] - mean.alpha
+  }
+  mean.alpha <- mean(alpha[1:C])
+  # smoothed calendar effect
+  calendar[1:Y] ~ car.normal(adj[], weights[], num[], tau.calendar)
+  tau.calendar ~ dgamma(0.1, 0.1)
+  # correlated errors
+  Omega.b[1:C, 1:C] ~ dwish(R[1:C, 1:C], C) # for missing baseline
+  Omega[1:C, 1:C] ~ dwish(R[1:C, 1:C], C)
+  Sigma[1:C, 1:C] <- inverse(Omega[1:C, 1:C])
+}

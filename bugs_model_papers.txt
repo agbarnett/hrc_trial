@@ -1,0 +1,30 @@
+model
+{
+  for(i in 1:N){
+      log_counts[i,1:C] ~ dmnorm(mu[i,1:C], Omega[1:C, 1:C])
+      standard[i] <- int + random_c[number[i],1] + (beta + random_c[number[i],2])*career[i]
+      mu[i,1] <- alpha_c[1] + standard[i]
+      mu[i,2] <- alpha_c[2] + standard[i]
+      mu[i,3] <- alpha_c[3] + standard[i]
+  }
+  # priors
+  int ~ dnorm(0, 0.0001)
+  for(j in 1:M){ # random intercept and slope
+    random[j,1] ~ dnorm(0, tau.random[1])
+    random[j,2] ~ dnorm(0, tau.random[2])
+    random_c[j,1] <- random[j,1] - mean.r[1]
+    random_c[j,2] <- random[j,2] - mean.r[2]
+  }
+  mean.r[1] <- mean(random[,1])
+  mean.r[2] <- mean(random[,2])
+  for(j in 1:C){
+    alpha[j] ~ dnorm(0, 0.0001)
+    alpha_c[j] <- alpha[j] - mean.alpha
+  }
+  mean.alpha <- mean(alpha[1:C])
+  tau.random[1] ~ dgamma(0.1, 0.1)
+  tau.random[2] ~ dgamma(0.1, 0.1)
+  beta ~ dnorm(0, 0.0001)
+  Omega[1:C, 1:C] ~ dwish(R[1:C, 1:C], C)
+  Sigma[1:C, 1:C] <- inverse(Omega[1:C, 1:C])
+}

@@ -1,0 +1,15 @@
+model
+{
+  for(i in 1:N){
+      outcome[i] ~ dnorm(mu[i], tau)
+      mu[i] <- int + calendar[year[i]] + beta*baseline[i] + gamma*treatment[i]
+  }
+  # priors
+  int ~ dnorm(0, 0.0001)
+  beta ~ dnorm(0, 0.0001)
+  gamma ~ dnorm(0, 0.0001)
+  # smoothed calendar effect
+  calendar[1:Y] ~ car.normal(adj[], weights[], num[], tau.calendar)
+  tau.calendar ~ dgamma(0.1, 0.1)
+  tau ~ dgamma(0.1, 0.1)
+}
