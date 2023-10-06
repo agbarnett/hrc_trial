@@ -9,7 +9,8 @@ library(tidyr)
 
 ### data
 # get all the numbers per year
-numbers = read_excel('../data/randomised.xlsx', sheet='Numbers', n_max=7, na = "NA", skip = 1) %>%
+numbers = read_excel('U:\\Research\\Projects\\ihbi\\aushsi\\aushsi_barnetta\\NHMRC\\NZ\\data\\randomised.xlsx', 
+                     sheet='Numbers', n_max=7, na = "NA", skip = 0) %>%
   clean_names() %>%
   select(-url_for_media_release)
 
@@ -30,7 +31,7 @@ labels = group_by(long1, year) %>%
 # plot
 tplot = ggplot(data=long1, aes(x=year, y=value, fill=name))+
   geom_bar(position='stack', stat='identity')+
-  geom_text(data=labels, aes(x=year, y=y, label=total), col='grey88')+
+  geom_text(data=labels, aes(x=year, y=y, label=value), col='grey88')+ # changed total to value
   scale_fill_manual(NULL, labels=c('Funded','Not funded'), values=c('dodgerblue','darkseagreen'))+
   xlab('Year') + 
   ylab('Count') + 
@@ -40,7 +41,7 @@ tplot = ggplot(data=long1, aes(x=year, y=value, fill=name))+
 tplot
 
 # export
-jpeg('figures/numbers_year.jpg', width=5, height=4, units='in', res=300)
+jpeg('figures/numbers_year.jpg', width=5, height=4, units='in', res=400)
 print(tplot)
 dev.off()
 

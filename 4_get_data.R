@@ -73,6 +73,7 @@ load('data/0_researchers_randomised.RData')
 researchers = mutate(researchers,
                      month = as.numeric(format(date,'%m')),
                      yrmon = year + ((month-1)/12)) %>%
+  filter(year <= 2021) %>% # needed for paper, as data were only used up to 2021.
   dplyr::select(-month)
 
 # add start year of papers being published to researcher data (there are some who started late)

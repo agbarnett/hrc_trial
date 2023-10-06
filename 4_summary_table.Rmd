@@ -1,0 +1,63 @@
+---
+title: 'Baseline summary table'
+author: "Adrian Barnett"
+date: "`r format(Sys.time(), '%d %B %Y')`"
+output:
+  word_document:
+    toc: false
+    reference_docx: rmarkdown-styles-reference.docx
+---
+
+
+```{r setup, include=FALSE}
+# using formatting in Word document (see above)
+knitr::opts_chunk$set(echo = FALSE, warning=FALSE, message=FALSE, error=FALSE, comment='', dpi=400)
+options(width=1000) # Wide pages
+options(scipen=999) # avoid scientific presentation
+source('99_functions.R')
+library(dplyr)
+library(tidyr) # for complete
+library(tableone)
+
+
+# randomisation groups
+load('data/0_researchers_randomised.RData')
+randomised = researchers # rename
+
+# get the publication data, from # 2_publication_data_[database].R
+source('4_get_data.R')
+# create combined data of papers
+papers = bind_rows(papers_scholar, papers_scopus, papers_researchgate, .id='database')
+
+# get first paper per author
+first = group_by(papers, number) %>%
+  summarise(first = min(year))
+```
+
+```{r}
+# create the analysis data, but just using baseline
+data = add_treatment_censored(in_random = randomised,
+                              in_biblio = paper_counts,
+                              summarise_baseline = TRUE) %>%
+  filter(years_since == 1) %>% # Just need one record per person
+  select(number, year, funded, starts_with('b_')) %>%
+  left_join(first, by='number') # add first year
+
+# Create a TableOne object
+vars = c('year','first','b_scholar','b_researchgate','b_scopus')
+tab2 <- CreateTableOne(vars = vars, 
+                       data = data, 
+                       factorVars = NULL, 
+                       strata = 'funded', 
+                       test = FALSE, 
+                       includeNA = TRUE,
+                       addOverall = FALSE) # no total column
+print(tab2, 
+      nonnormal = vars, # use median instead of mean
+      catDigits = 1, # no longer allows 0 
+      contDigits = 1, 
+      explain = TRUE, 
+      showAllLevels = TRUE,
+formatOptions = list(big.mark = ""))
+```
+

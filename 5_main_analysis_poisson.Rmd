@@ -1,0 +1,293 @@
+---
+title: 'A randomised trial to estimate the effect of funding on research productivity: Main analysis using Poisson models'
+author: "Adrian Barnett"
+date: "`r format(Sys.time(), '%d %B %Y')`"
+output:
+  word_document:
+    toc: true
+    toc_depth: 1
+    reference_docx: rmarkdown-styles-reference.docx
+---
+
+```{r setup, include=FALSE}
+# using formatting in Word document (see above)
+knitr::opts_chunk$set(echo = FALSE, warning=FALSE, message=FALSE, error=FALSE, comment='', dpi=400)
+options(width=1000) # Wide pages
+options(scipen=999) # avoid scientific presentation
+source('99_functions.R')
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(janitor) # for tables with column totals
+library(flextable)
+library(metaforest) # for meta-analysis
+library(mitools) # for summarising imputations
+# Bayes packages:
+library(nimble)
+library(ggmcmc) # for chain diagnostics
+library(coda)
+# plotting packages:
+library(gridExtra)
+library(ggplot2)
+g.theme = theme_bw() + theme(panel.grid.minor = element_blank())
+
+# get the analysis-read data sets on funding and papers; with treatment variable, baseline counts and denominators
+source('4_get_data.R')
+## paper data, annual
+only_consent = FALSE # big switch that impacts all results
+analysis_ready = add_treatment_censored(in_random = researchers, 
+                                        only_consent = only_consent,
+                                        monthly = FALSE, 
+                                        in_biblio = paper_counts)
+```
+
+This analysis uses bibliographic data from researchers. 
+The follow-up dates were `r format(scholar_date, '%d-%b-%Y')` for _Google Scholar_, `r format(scopus_date, '%d-%b-%Y')` for _Scopus_, `r format(researchgate_date, '%d-%b-%Y')` for _researchgate_, and `r format(altmetric_date, '%d-%b-%Y')` for _Altmetric_. 
+
+###### page break
+
+# Impute missing bibliographic data
+
+```{r, include=FALSE}
+n_impute = 30 # number of imputations
+```
+
+Some researchers were missing the publication counts from one or two of the three databases. To avoid those researchers with more complete data counting towards the final result, we impute the missing publication numbers. We created `r n_impute` imputed data sets. The imputation exploited the strong correlation between the three databases.
+
+### Correlation matrix
+
+```{r}
+exists = length(dir('data', pattern='^5_imputed.RData$'))>0
+if(exists == FALSE){source('99_impute_bibliographic.R')}
+if(exists == TRUE){load('data/5_imputed.RData')} # save time
+ftab = flextable(data.frame(cormat)) %>%
+  theme_box() %>%
+  colformat_double(digits=3)
+ftab
+```
+
+Above are the estimated correlation matrix used in the imputation of missing bibliographic data. The matrix show the strong correlation in the bibliographic databases, as researchers have generally similar numbers in each database.
+
+# Yearly publication counts
+
+We examine the effect of funding on yearly publication counts. 
+
+```{r, include=FALSE}
+## run the three outcomes/databases independently
+# a) scholar
+file = c('bayes', 'scholar_publication_counts')
+outfile = make_file(file, only_consent = only_consent)
+if(outfile$exists == FALSE){ # only run if file does not exist (saves time)
+  # model choices:
+  pilot = FALSE # run big MCMC sample
+  dependent = 'scholar'
+  # loop through imputations
+  results = list() # list to store results
+  for (imp in 1:n_impute){
+    source('99_nimble_publications_poisson.R')
+    results[[imp]] = results_main
+  }
+  save(results, pilot, file = outfile$file)
+}
+if(outfile$exists == TRUE){
+  load(outfile$file)
+}
+scholar_results = results # rename
+# b) scopus
+file = c('bayes', 'scopus_publication_counts')
+outfile = make_file(file, only_consent = only_consent)
+if(outfile$exists == FALSE){
+  # model choices:
+  pilot = FALSE # run big MCMC sample
+  dependent = 'scopus'
+  # loop through imputations
+  results = list() # list to store results
+  for (imp in 1:n_impute){
+    source('99_nimble_publications_poisson.R')
+    results[[imp]] = results_main
+  }
+  save(results, pilot, file = outfile$file)
+}
+if(outfile$exists == TRUE){
+  load(outfile$file)
+}
+scopus_results = results # rename
+# c) researchgate
+file = c('bayes', 'researchgate_publication_counts')
+outfile = make_file(file, only_consent = only_consent)
+if(outfile$exists == FALSE){
+  # model choices:
+  pilot = FALSE # run big MCMC sample
+  dependent = 'researchgate'
+  # loop through imputations
+  results = list() # list to store results
+  for (imp in 1:n_impute){
+    source('99_nimble_publications_poisson.R')
+    results[[imp]] = results_main
+  }
+  save(results, pilot, file = outfile$file)
+}
+if(outfile$exists == TRUE){
+  load(outfile$file)
+}
+researchgate_results = results # rename
+```
+
+### Model fit
+
+Comparing the model fit between the time-fixed and time-varying models.
+
+```{r, fig.width = 7}
+to_plot = NULL
+for (k in 1:n_impute){
+  fit_table = bind_rows(scholar_results[[k]]$model_fit,
+                  scopus_results[[k]]$model_fit,
+                  researchgate_results[[k]]$model_fit, .id = 'database') %>%
+  mutate(
+    imputation = k,
+    database = case_when(
+    database == 1 ~ 'Google scholar',
+    database == 2 ~ 'Scopus',
+    database == 3 ~ 'Researchgate'
+  ))
+  to_plot = bind_rows(to_plot, fit_table)
+}
+waic_plot = ggplot(data = to_plot, aes(x = model, y=WAIC))+
+  geom_boxplot()+
+  geom_point()+
+  xlab('Model')+
+  theme_bw()+
+  facet_wrap(~database, scales='free')
+waic_plot
+```
+
+There is little difference between the time-fixed and time-varying models for any database. Hence we focus on the simpler time-fixed model.
+
+### Estimates using imputation
+
+```{r}
+# combine and plot the results
+combined_results = NULL
+for (k in 1:n_impute){
+  this_table = bind_rows(scholar_results[[k]]$table,
+                  scopus_results[[k]]$table,
+                  researchgate_results[[k]]$table, .id = 'database_num') %>%
+  mutate(
+    imputation = k,
+    database_num = as.numeric(database_num),
+    database = case_when(
+    database_num == 1 ~ 'Google scholar',
+    database_num == 2 ~ 'Scopus',
+    database_num == 3 ~ 'Researchgate'
+  ))
+  combined_results = bind_rows(combined_results, this_table)
+}
+# just show five random
+isample = sample(1:n_impute, size=5, replace=FALSE)
+combined_results = filter(combined_results, imputation %in% isample)
+#
+ests_plot = ggplot(data = combined_results, aes(x = database, y=mean, ymin=lower, ymax=upper, group=imputation))+
+  geom_point(position=position_jitter(width=0.05))+
+  geom_errorbar(width=0, position=position_jitter(width=0.05))+
+  xlab('')+
+  ylab('Estimate')+
+  coord_flip()+
+  theme_bw()+
+  facet_wrap(~parameter, scales='free')
+ests_plot
+```
+
+## Combined results
+
+```{r combine, include=FALSE}
+# combine the imputations 
+scholar_coef = scholar_vcov = scopus_coef = scopus_vcov = researchgate_coef = researchgate_vcov = NULL
+for (k in 1:n_impute){
+  # a) google scholar
+  scholar_chains = rbind(scholar_results[[k]]$chains[[1]],
+                         scholar_results[[k]]$chains[[2]])
+  scholar_coef[[k]] = colMeans(scholar_chains[,1:3]) # ignore tau
+  scholar_vcov[[k]] = cov(scholar_chains[,1:3])
+  # b) scopus
+  scopus_chains = rbind(scopus_results[[k]]$chains[[1]],
+                        scopus_results[[k]]$chains[[2]])
+  scopus_coef[[k]] = colMeans(scopus_chains[,1:3]) # ignore tau
+  scopus_vcov[[k]] = cov(scopus_chains[,1:3])
+  # c) researchgate
+  researchgate_chains = rbind(researchgate_results[[k]]$chains[[1]],
+                         researchgate_results[[k]]$chains[[2]])
+  researchgate_coef[[k]] = colMeans(researchgate_chains[,1:3]) # ignore tau
+  researchgate_vcov[[k]] = cov(researchgate_chains[,1:3])
+}
+# combine the estimates from the imputations
+scholar_ests = summary(MIcombine(scholar_coef, scholar_vcov)) 
+scopus_ests = summary(MIcombine(scopus_coef, scopus_vcov)) 
+researchgate_ests = summary(MIcombine(researchgate_coef, researchgate_vcov)) 
+# combine the three estimates in a meta-analysis
+means = c(scholar_ests[3,1], scopus_ests[3,1], researchgate_ests[3,1])
+ses = c(scholar_ests[3,2], scopus_ests[3,2], researchgate_ests[3,2])
+res <- rma(yi = means, sei = ses, method="FE")
+```
+
+The table below shows the estimates for each database and the overall estimate. The estimates for each database account for the missing bibliographic data. The overall estimate is from a fixed effect meta-analysis of the three databases. 
+
+```{r}
+# plot the three database and overall estimates
+to_plot = bind_rows(scholar_ests, scopus_ests, researchgate_ests, .id = 'database_num') %>%
+  tibble::rownames_to_column() %>%
+  filter(str_detect(rowname, 'gamma')) %>%
+  mutate(database_num = as.numeric(database_num)) %>%
+  rename('mean' = 'results',
+         'lower' = '(lower',
+         'upper' = 'upper)')
+# add overall
+overall = data.frame(database_num = 4, 
+                     z = qnorm(0.975),
+                     mean = res$beta) %>%
+  mutate(lower = res$beta - (z*res$se), 
+         upper = res$beta + (z*res$se))
+to_plot = bind_rows(to_plot, overall) %>%
+  mutate(mean = exp(mean),
+         lower = exp(lower),
+         upper = exp(upper))
+labels = c('Google scholar','Scopus','Researchgate','Overall')
+#
+plot = ggplot(data = to_plot, aes(x=database_num, y=mean, ymin=lower, ymax=upper))+
+  xlab('')+
+  geom_hline(yintercept=1, lty=2)+
+  scale_x_reverse(breaks=1:4, labels=labels)+ # overall at the bottom
+  ylab('Rate ratio')+
+  geom_point(size=2, col='dodgerblue')+
+  geom_errorbar(width=0, size=1.05, col='dodgerblue')+
+  coord_flip()+
+  theme_bw()+
+  theme(panel.grid.minor = element_blank())
+plot
+```
+
+# Chain diagnostics
+
+We show some example diagnostics from the Scopus estimates.
+
+### Densities
+
+```{r}
+chains = scopus_results[[1]]$chains
+c1 = mcmc(data= chains[[1]], start = 1, end = dim(chains[[1]])[1])
+c2 = mcmc(data= chains[[2]], start = 1, end = dim(chains[[1]])[1])
+chains = as.mcmc.list(list(c1,c2))
+res = ggs(S = chains, burnin=FALSE) # make into object for ggmcmc
+ggs_density(res)
+```
+
+### Traces
+
+```{r}
+ggs_traceplot(res)
+```
+
+### Geweke diagnostics
+
+```{r}
+ggs_geweke(res)
+```

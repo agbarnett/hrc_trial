@@ -3,7 +3,9 @@
 # from manual "A node following a multivariate distribution must be either entirely observed or entirely missing"
 # version using monthly data and time-varying treatment effect
 # August 2022
-seed = TeachingDemos::char2seed('Colchester')
+seed = rep(0, 2)
+seed[1] = TeachingDemos::char2seed('Colchester')
+seed[2] = TeachingDemos::char2seed('Port Vale')
 source('99_mcmc.R')
 
 ## define the models
@@ -101,8 +103,13 @@ mcmc_out_errors <- nimbleMCMC(model = modelErrors,
                        setSeed = seed,
                        WAIC = TRUE)
 
-# convert chains to coda
-#mcmc = as.mcmc(mcmc_out_errors$samples$chain1) # can only do one chain
+# selected chains
+index = which(colnames(mcmc_out$samples$chain1) %in% c('alpha','beta','gamma','tau.person'))
+chain1 = mcmc_out$samples$chain1[,index]
+chain2 = mcmc_out$samples$chain2[,index]
+chains = list()
+chains[[1]] = chain1
+chains[[2]] = chain2
 
 # extract summary
 table = as.data.frame(mcmc_out_errors$summary$all.chains) %>%
@@ -111,7 +118,7 @@ table = as.data.frame(mcmc_out_errors$summary$all.chains) %>%
   separate(col=index, into=c('row','database'))
 
 # add posterior p-values
-pos = mcmc_out_errors$samples$chain1 > 0
+pos = rbind(mcmc_out_errors$samples$chain1, mcmc_out_errors$samples$chain2) > 0
 pos = colMeans(pos)
 pos.dash = 1 - pos
 pval = pmax(2*pmin(pos, pos.dash), 1/(2*MCMC))
@@ -164,3 +171,4 @@ results_yrmon_monthly_varying$covmat = covmat
 results_yrmon_monthly_varying$model_fit = model_fit
 results_yrmon_monthly_varying$table = table
 results_yrmon_monthly_varying$residuals = residuals
+results_yrmon_monthly_varying$chains = chains

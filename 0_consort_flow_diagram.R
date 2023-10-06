@@ -1,6 +1,7 @@
 # 0_consort_flow.R
 # make consort flow diagram of randomised
 # big N for applications little n for researchers
+# does not work in onedrive
 # June 2021
 library(diagram)
 library(readxl)
@@ -9,8 +10,8 @@ library(janitor)
 
 ### data
 # get all the numbers per year
-numbers = read_excel('../data/randomised.xlsx', sheet='Numbers', n_max=7, na = "NA", skip = 1) %>%
-  clean_names() %>%
+numbers = read_excel('../data/randomised.xlsx', sheet='Numbers', n_max=7, na = "NA", skip = 0) %>%
+  clean_names() %>%  
   select(-url_for_media_release)
 
 # get list of consented researchers
@@ -23,8 +24,11 @@ non_consent = read_excel(path = '../data/randomised.xlsx', sheet='Non-consenting
 # put together
 researchers = bind_rows(consent, non_consent, .id='consent') %>%
   mutate(name = paste(first_named_investigator_first_name, first_named_investigator_surname),
+         date_announced = as.Date(as.character(date_announced), format = '%Y%m%d'),
+         year = as.numeric(format(date_announced, '%Y')),
          consent = ifelse(consent==1, 'Yes', 'No')) %>%
-  select(consent, result, name) 
+  filter(year <= 2021) %>% # needed for paper, as data were only used up to 2021.
+  select(consent, result, name, date_announced) 
 
 ### numbers
 # a) split overall numbers by consent or not and funded or not

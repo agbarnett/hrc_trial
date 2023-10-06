@@ -23,6 +23,7 @@ researchers = bind_rows(consent, non_consent, .id='consent') %>%
          date = as.Date(as.character(date_announced), format='%Y%m%d', origin='1970-01-01'),
          year = as.numeric(str_sub(date_announced, 1, 4)),
          consent = ifelse(consent==1, 'Yes', 'No')) %>%
+  filter(year <= 2021) %>% # needed for paper, this was the last year used
   select(result, 
          consent,
          first_named_investigator_title,

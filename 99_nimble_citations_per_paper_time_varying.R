@@ -3,13 +3,15 @@
 # no need for offset as fewer papers cancel fewer citations
 # version with citations per paper outcome and time-varying
 # August 2022
-seed = TeachingDemos::char2seed('Colchester')
+seed = rep(0, 2)
+seed[1] = TeachingDemos::char2seed('Colchester')
+seed[2] = TeachingDemos::char2seed('Port Vale')
 source('99_mcmc.R')
 
 ## define the model
 code <- nimbleCode({
   for (i in 1:N) {
-    log_counts[i] ~ dnorm(mean = mu[i], tau)
+    cites_per[i] ~ dnorm(mean = mu[i], tau)
     trt[i] <- (lambda*years_since[i] + gamma)*treatment[i]
     control[i] <- (delta*years_since[i])*(1-treatment[i])
     mu[i] <- alpha + r_int[person[i]] + (beta*baseline[i]) + trt[i] + control[i]
@@ -18,8 +20,8 @@ code <- nimbleCode({
   for(j in 1:P){
     r_int[j] ~ dnorm(0, tau.person)
   }
-  tau.person ~ dgamma(0.1, 0.1)
-  tau ~ dgamma(0.1, 0.1) # overall precision
+  tau.person ~ dgamma(0.01, 0.01)
+  tau ~ dgamma(0.01, 0.01) # overall precision
   alpha ~ dnorm(0, sd = 10000)
   beta ~ dnorm(0, sd = 10000)
   lambda ~ dnorm(0, sd = 10000)
@@ -33,24 +35,28 @@ code <- nimbleCode({
 })
 
 ## data
+# centre baseline for chain mixing
+baseline = log2(analysis_ready_citations_per_paper$b_scopus + 1) # log-transform baseline (base 2)
+baseline.centre = baseline - median(baseline)
+#
 constants <- list(N = nrow(analysis_ready_citations_per_paper),
                   years_since = analysis_ready_citations_per_paper$years_since - 2 , # centre
-                  T = max(analysis_ready_monthly$years_since),
+                  T = max(analysis_ready_citations_per_paper$years_since),
                   treatment = as.numeric(analysis_ready_citations_per_paper$funded == 'Funded'),
                   person = as.numeric(as.factor(analysis_ready_citations_per_paper$number)),
                   P = length(unique(analysis_ready_citations_per_paper$number)),
-                  baseline = log2(analysis_ready_citations_per_paper$b_scopus + 1)) # log-transform baseline (base 2)
-data <- list(log_counts = log( analysis_ready_citations_per_paper$scopus + 1))
+                  baseline = baseline.centre) 
+data <- list(cites_per = analysis_ready_citations_per_paper$scopus)
 
 ## initial values
-inits <- list(beta = 0.2,
+inits <- list(beta = 0.4,
               tau.person = 100,
               gamma = 0,
               lambda = 0,
               delta = 0,
               r_int = rep(0, constants$P),
               tau = 1, 
-              alpha = 0)
+              alpha = mean(analysis_ready_citations_per_paper$scopus))
 
 # parameters to store
 parms = c('r_int','tau','tau.person','beta','alpha','gamma','lambda','delta','mu','diff','slope.diff')
@@ -73,8 +79,13 @@ mcmc_out <- nimbleMCMC(model = model,
                        setSeed = seed,
                        WAIC = TRUE)
 
-# convert chains to coda
-mcmc = as.mcmc(mcmc_out$samples$chain1) # can only do one chain
+# selected chains
+index = which(colnames(mcmc_out$samples$chain1) %in% c('alpha','beta','gamma','tau.person'))
+chain1 = mcmc_out$samples$chain1[,index]
+chain2 = mcmc_out$samples$chain2[,index]
+chains = list()
+chains[[1]] = chain1
+chains[[2]] = chain2
 
 # extract summary
 table = as.data.frame(mcmc_out$summary$all.chains) %>%
@@ -83,7 +94,7 @@ table = as.data.frame(mcmc_out$summary$all.chains) %>%
   separate(col=index, into=c('row','database'))
 
 # add posterior p-values
-pos = mcmc_out$samples$chain1 > 0
+pos = rbind(mcmc_out$samples$chain1, mcmc_out$samples$chain2) > 0
 pos = colMeans(pos)
 pos.dash = 1 - pos
 pval = pmax(2*pmin(pos, pos.dash), 1/(2*MCMC))
@@ -102,9 +113,8 @@ residuals = mutate(analysis_ready_citations_per_paper,
                    row = 1:n(),
                    observed = scopus) %>%
   left_join(fitted, by=c('row')) %>%
-  mutate(obs = log(observed+1),
-         residual = obs - mean) %>%
-  select(number, row, year, years_since, obs, mean, residual)
+  mutate(residual = observed - mean) %>%
+  select(number, row, year, years_since, observed, mean, residual)
 
 # now remove from table
 table = filter(table, 
@@ -114,12 +124,13 @@ table = filter(table,
 
 ## model fit
 model_fit = data.frame(outcome = 'Citations per paper', 
-                model = 'Time fixed',
+                model = 'Time varying',
                 WAIC = mcmc_out$WAIC$WAIC,
                 pWAIC = mcmc_out$WAIC$pWAIC)
 
 # save results as a list
 results_citations_per_paper_time_varying = list()
 results_citations_per_paper_time_varying$model_fit = model_fit
+results_citations_per_paper_time_varying$chains = chains
 results_citations_per_paper_time_varying$table = table
 results_citations_per_paper_time_varying$residuals = residuals

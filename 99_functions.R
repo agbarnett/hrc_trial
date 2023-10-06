@@ -754,6 +754,8 @@ parameter_rename = function(x, papers=TRUE, monthly=FALSE){
     x == 'beta' & papers==FALSE ~ 'Double pre-randomisation citations',
     x == 'eta' ~ 'Year = 2022',
   x == 'gamma' ~ 'Funding',
+  x == 'years_since' ~ 'Years since randomisation',
+  x == 'interaction' ~ 'Funding by year interaction',
   x == 'delta' ~ 'Change by years since funding for not funded',
   x == 'lambda' ~ 'Change by years since funding for funded',
   x == 'slope.diff' ~ 'Difference in change estimates (funded minus not funded)',

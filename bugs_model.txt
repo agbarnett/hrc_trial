@@ -1,25 +1,21 @@
 model
 {
   for(i in 1:N){
-      log_counts[i,1:C] ~ dmnorm(mu[i,1:C], Omega[1:C, 1:C])
-      standard[i] <- int 
-      for(j in 1:C){
-        mu[i,j] <- alpha_c[j] + beta*baseline[i,j] + standard[i]
-      }
-      baseline[i,1:C] ~ dmnorm(zeros[1:C], Omega.b[1:C, 1:C]) # for missing
+    e[i, 1:C] ~ dmnorm(zeros[1:C], Omega[1:C, 1:C])
+    for(j in 1:C){
+      counts[i,j] ~ dpois(mu[i,j])
+      log(mu[i,j]) <- alpha[j] + beta*consent[i] + random[number[i]] + e[i,j]
+    }
   }
-  ## priors
-  # random intercept for each database
+  for(j in 1:M){ # random intercept
+    random[j] ~ dnorm(0, tau.random)
+  }
   for(j in 1:C){
     alpha[j] ~ dnorm(0, 0.0001)
-    alpha_c[j] <- alpha[j] - mean.alpha
   }
-  mean.alpha <- mean(alpha[1:C])
-  # 
-  int ~ dnorm(0, 0.0001)
+  # priors
+  tau.random ~ dgamma(0.1, 0.1)
   beta ~ dnorm(0, 0.0001)
-  # correlated errors
-  Omega.b[1:C, 1:C] ~ dwish(R[1:C, 1:C], C) # for missing baseline
-  Omega[1:C, 1:C] ~ dwish(R[1:C, 1:C], C)
+  Omega[1:C, 1:C] ~ dwish(R[1:C,1:C],C)
   Sigma[1:C, 1:C] <- inverse(Omega[1:C, 1:C])
 }

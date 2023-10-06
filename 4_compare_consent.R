@@ -1,7 +1,7 @@
 # 4_compare_consent.R
 # compare consent and non-consent for 1) paper counts, 2) years of experience
 # results used by 4_summary_data.Rmd
-# March 2022
+# October 2023
 source('99_functions.R')
 library(tidyverse)
 library(R2WinBUGS)
@@ -62,6 +62,7 @@ all_data = mutate(all_data,
 
 ### Model 1, paper numbers ###
 pilot = FALSE
+seed = TeachingDemos::char2seed('reading')
 source('99_mcmc.R')
 
 ## transform to wide for multivariate model
@@ -77,10 +78,11 @@ bugs = file(bfile, 'w')
 cat('model
 {
   for(i in 1:N){
-      log_counts[i,1:C] ~ dmnorm(mu[i,1:C], Omega[1:C, 1:C])
-      mu[i,1] <- alpha[1] + beta*consent[i] + random[number[i]]
-      mu[i,2] <- alpha[2] + beta*consent[i] + random[number[i]]
-      mu[i,3] <- alpha[3] + beta*consent[i] + random[number[i]]
+    e[i, 1:C] ~ dmnorm(zeros[1:C], Omega[1:C, 1:C])
+    for(j in 1:C){
+      counts[i,j] ~ dpois(mu[i,j])
+      log(mu[i,j]) <- alpha[j] + beta*consent[i] + random[number[i]] + e[i,j]
+    }
   }
   for(j in 1:M){ # random intercept
     random[j] ~ dnorm(0, tau.random)
@@ -107,9 +109,10 @@ bdata = list(N = N,
              C = C, 
              M = M,
              R = R,
+             zeros = rep(0, C),
              number = wide$number,
              consent = as.numeric(wide$consent == 'Yes'),
-             log_counts = log(matrix_count + 1) # log-transform
+             counts = matrix_count
              )
 # initial values
 inits = list(tau.random=10, random=rep(0, M), beta=0, alpha=rep(0,C), Omega=R)  # start all with no flag for mean or variance
@@ -157,7 +160,7 @@ bugs_res_residuals = bugs(data=bdata, inits=inits, parameters=parms, model.file=
                 n.chains=n.chains, n.iter=MCMC*thin*2, n.thin=thin, bugs.seed=seed, debug=debug,
                 bugs.directory="c:/Program Files/WinBUGS14")
 # calculate residual (some missing)
-res = bugs_res_residuals$mean$mu - bdata$log_counts %>%
+res = bugs_res_residuals$mean$mu - bdata$counts %>%
   as.data.frame()
 residuals = mutate(res, number = 1:n()) %>% # add researcher number
      pivot_longer(cols= -'number', values_to='res', names_to = 'database')

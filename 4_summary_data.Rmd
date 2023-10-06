@@ -48,6 +48,8 @@ knitr::include_graphics('figures/numbers_year.jpg')
 
 There were 2 years where all applicants who made it through the peer review were funded.
 
+The right hand panel shows the total number of applicants.
+
 ## Numbers who consented and did not consent over time
 
 ```{r}
@@ -298,6 +300,11 @@ tile = ggplot(data=for_tile, aes(x=row, y=factor(name), fill=value))+
   theme(legend.position = 'none',
         text = element_text(size=14))
 tile
+
+# export tile plot
+jpeg('figures/database_availability.jpg', width=4, height=5, units='in', res=500, quality=100)
+print(tile)
+dev.off()
 
 # for text below
 num = max(for_tile$n)

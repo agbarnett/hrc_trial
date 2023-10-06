@@ -14,7 +14,7 @@ output:
 knitr::opts_chunk$set(echo = FALSE, warning=FALSE, message=FALSE, error=FALSE, comment='', dpi=400)
 options(width=1000) # Wide pages
 options(scipen=999) # avoid scientific presentation
-source('99_functions.R')
+source('99__functions.R')
 library(dplyr)
 library(tidyr)
 library(stringr)
@@ -22,6 +22,7 @@ library(janitor) # for tables with column totals
 library(flextable)
 library(survival)
 library(broom)
+library(mitools) # for imputation
 # Bayes packages:
 library(nimble)
 library(ggmcmc)
@@ -34,20 +35,24 @@ g.theme = theme_bw() + theme(panel.grid.minor = element_blank())
 
 # get the analysis-read data sets on funding and papers; with treatment variable, baseline counts and denominators
 source('4_get_data.R')
+
+# big switch that impacts all results (rename word doc)
+only_consent = FALSE
+
 ## paper data, annual
-only_consent = FALSE # big switch that impacts all results
 analysis_ready = add_treatment_censored(in_random = researchers, 
                                         only_consent = only_consent,
                                         monthly = FALSE, 
+                                        check_plot = FALSE,
                                         in_biblio = paper_counts)
-## paper data, monthly
-analysis_ready_monthly = add_treatment_censored(in_random = researchers, 
-                                                only_consent = only_consent,
-                                                in_biblio = paper_counts_monthly,
-                                                monthly = TRUE)
+## paper data, monthly - no longer used
+#analysis_ready_monthly = add_treatment_censored(in_random = researchers, 
+#                                                only_consent = only_consent,
+#                                                in_biblio = paper_counts_monthly,
+#                                                monthly = TRUE)
 # quick fix for duplicated months/years (checked that all months and years are the same)
-analysis_ready_monthly = dplyr::select(analysis_ready_monthly, -month.x, -year.x, -year.y) %>%
-  rename('month' = 'month.y')
+#analysis_ready_monthly = dplyr::select(analysis_ready_monthly, -month.x, -year.x, -year.y) %>%
+#  rename('month' = 'month.y')
 ## citation data, annual 
 analysis_ready_citations = add_treatment_censored(in_random = researchers, 
                                                 only_consent = only_consent,
@@ -87,6 +92,17 @@ analysis_ready_altmetric = mutate(analysis_ready_altmetric,
 ## employment
 analysis_ready_employment = add_treatment_employment(in_random = researchers, 
                             only_consent = only_consent)
+
+### impute baseline counts for all three databases
+# data created by '99_impute_bibliographic_only_baseline.R'
+load('data/5_imputed.RData') # contains analysis_ready_imputed as a list
+if(only_consent == TRUE){# imputation used all data, so restrict here
+  consented = filter(researchers, consent == 'Yes') %>% pull(number)
+  for (k in 1:n_impute){
+    analysis_ready_imputed[[k]] = filter(analysis_ready_imputed[[k]], floor(number) %in% consented)
+  }
+}
+
 ```
 
 This analysis uses bibliographic data from researchers. 
@@ -104,27 +120,102 @@ outfile = make_file(file, only_consent = only_consent)
 if(outfile$exists == FALSE){
   # model choices:
   pilot = FALSE # run big model
-  source('99_nimble_publications.R')
-  save(results_main, file = outfile$file)
+  # loop through imputations
+  results = list() # list to store results
+  for (imp in 1:n_impute){
+    source('99_nimble_publications.R')
+    results[[imp]] = results_main
+  }
+  save(results, pilot, file = outfile$file)
 }
 if(outfile$exists == TRUE){
   load(outfile$file)
 }
+results_main = results # rename
+```
+
+
+### Estimates using imputed data
+
+The baseline publication counts were imputed when missing. The plots below show the estimates from 5 imputations. Imputing the missing baseline data had very little effect on the estimates.
+
+```{r}
+# combine and plot the results
+combined_results = NULL
+for (k in 1:n_impute){
+  this_table = bind_rows(results_main[[k]]$table) %>%
+    mutate(imputation = k) 
+  combined_results = bind_rows(combined_results, this_table)
+}
+# just show first five
+isample = 1:5
+combined_results = filter(combined_results, imputation %in% isample)
+#
+ests_plot = ggplot(data = combined_results, aes(x = imputation, y=mean, ymin=lower, ymax=upper))+
+  geom_point()+
+  geom_errorbar(width=0)+
+  xlab('Imputation')+
+  ylab('Estimate')+
+  coord_flip()+
+  theme_bw()+
+  facet_wrap(~parameter, scales='free')
+ests_plot
+```
+
+
+```{r combine, include=FALSE}
+# combine the imputations 
+coef = vcov = NULL
+for (k in 1:n_impute){
+  chains = rbind(results_main[[k]]$chains[[1]],
+                 results_main[[k]]$chains[[2]])
+  coef[[k]] = colMeans(chains[,1:5]) # ignore tau
+  vcov[[k]] = cov(chains[,1:5])
+}
+# combine the estimates from the imputations
+ests = summary(MIcombine(coef, vcov)) %>%
+  tibble::rownames_to_column()  %>%
+  rename('mean' = 'results',
+         'lower' = '(lower',
+         'upper' = 'upper)')
 ```
 
 ### Table of estimates (yearly publication data)
 
+The table below uses the combined estimates from imputation.
+
 ```{r}
-to_table = filter(results_main$table, 
+to_table = filter(ests, 
+    str_detect(rowname, pattern='beta|gamma')) %>% # do not show intercept
+  mutate(term = parameter_rename(rowname),
+#  pvalue = format.pval(pvalue, digits=2, eps=0.0001), # not in imputed data
+    mean = exp(mean), # rate ratio
+           lower = exp(lower),
+           upper = exp(upper),
+  mean = roundz(mean, 2), # rounding
+         lower = roundz(lower, 2),
+         upper = roundz(upper, 2),
+         ci = paste(lower , ' to ' , upper, sep='')) %>%
+  dplyr::select(term, mean, ci)
+ftab = flextable(to_table)%>%
+  autofit() %>%
+  theme_box()
+ftab
+```
+
+The table below uses the estimates from a single imputation.
+
+```{r}
+to_table = filter(results_main[[1]]$table, 
     str_detect(parameter, pattern='beta|gamma')) %>% # do not show intercept
   mutate(term = parameter_rename(parameter),
-  pvalue = format.pval(pvalue, digits=2, eps=0.0001),
-    mean = 100*(exp(mean)- 1), # percent change
-           lower = 100*(exp(lower)- 1),
-           upper = 100*(exp(upper)- 1),
-  mean = roundz(mean, 1), # rounding
-         lower = roundz(lower, 1),
-         upper = roundz(upper, 1),
+  pvalue = format.pval(pvalue, digits=2, eps=0.0001), # not in imputed data
+    mean = exp(mean), # rate ratio
+           lower = exp(lower),
+           upper = exp(upper),
+  mean = roundz(mean, 2), # rounding
+         lower = roundz(lower, 2),
+         upper = roundz(upper, 2),
          ci = paste(lower , ' to ' , upper, sep='')) %>%
   dplyr::select(term, mean, ci, pvalue)
 ftab = flextable(to_table)%>%
@@ -133,7 +224,7 @@ ftab = flextable(to_table)%>%
 ftab
 ```
 
-The table shows estimated percent changes, 95% credible intervals, and Bayesian posterior p-value.
+The table shows estimated rate ratios, 95% credible intervals, and Bayesian posterior p-value.
 
 As expected there was a strong effect of the number of papers a researcher had prior to randomisation on their post-randomisation output. 
 
@@ -148,19 +239,115 @@ file = c('bayes','model_time_varying')
 outfile = make_file(file, only_consent = only_consent)
 pilot = FALSE
 if(outfile$exists == FALSE){
-  source('99_nimble_publications_time_varying.R')
-  save(results_time_varying, file = outfile$file)
+  # loop through imputations
+  results_main = list() # list to store results
+  for (imp in 1:n_impute){
+    source('99_nimble_publications_time_varying.R')
+    results_main[[imp]] = results_time_varying
+  }
+  results_time_varying = results_main # rename
+  save(results_time_varying, pilot, file = outfile$file)
 }
 if(outfile$exists == TRUE){
   load(outfile$file)
 }
 ```
 
+### Model fit
+
+Comparing the model fit between the time-fixed and time-varying model for publication counts.
+
+```{r, fig.width = 6}
+# get previous results
+load("bayes/main_publication_counts.RData")
+results_main = results # rename
+n_impute = 10
+#
+to_plot = NULL
+for (k in 1:n_impute){
+  fit_table1 = bind_rows(results_main[[k]]$model_fit) %>%
+    mutate(imputation = k)
+  fit_table2 = bind_rows(results_time_varying[[k]]$model_fit) %>%
+    mutate(imputation = k)
+  to_plot = bind_rows(to_plot, fit_table1, fit_table2)
+}
+waic_plot = ggplot(data = to_plot, aes(x = model, y=WAIC))+
+  geom_boxplot()+
+  geom_point()+
+  xlab('Model')+
+  theme_bw()
+waic_plot
+```
+
+The time-fixed model has the smallest WAIC and has fewer parameters. Hence is the preferred model.
+
+```{r combine_varying, include=FALSE}
+# combine the imputations 
+coef = vcov = NULL
+for (k in 1:n_impute){
+  chains = rbind(results_time_varying[[k]]$chains[[1]],
+                 results_time_varying[[k]]$chains[[2]])
+  coef[[k]] = colMeans(chains[,1:5]) # ignore tau
+  vcov[[k]] = cov(chains[,1:5])
+}
+# combine the estimates from the imputations
+ests_varying = summary(MIcombine(coef, vcov)) %>%
+  tibble::rownames_to_column()  %>%
+  rename('mean' = 'results',
+         'lower' = '(lower',
+         'upper' = 'upper)')
+```
+
+### Table of estimates (yearly publication data - time-varying)
+
+The table below is from the multiple imputations.
+
 ```{r}
-time_varying =  filter(results_time_varying$table, str_detect(parameter, pattern='^diff')) %>%
-  mutate(mean = 100*(exp(mean)- 1), # percent change
-      lower = 100*(exp(lower)- 1),
-      upper = 100*(exp(upper)- 1),
+to_table = filter(ests_varying, 
+    str_detect(rowname, pattern='beta|gamma')) %>% # do not show intercept
+  mutate(term = parameter_rename(rowname),
+#  pvalue = format.pval(pvalue, digits=2, eps=0.0001), # not in imputed data
+    mean = exp(mean), # rate ratio
+           lower = exp(lower),
+           upper = exp(upper),
+  mean = roundz(mean, 2), # rounding
+         lower = roundz(lower, 2),
+         upper = roundz(upper, 2),
+         ci = paste(lower , ' to ' , upper, sep='')) %>%
+  dplyr::select(term, mean, ci)
+ftab = flextable(to_table)%>%
+  autofit() %>%
+  theme_box()
+ftab
+```
+
+The table below is from a single imputation.
+
+```{r}
+to_table = filter(results_time_varying[[1]]$table, 
+    str_detect(parameter, pattern='beta|gamma')) %>% # do not show intercept
+  mutate(term = parameter_rename(parameter),
+  pvalue = format.pval(pvalue, digits=2, eps=0.0001), # not in imputed data
+    mean = exp(mean), # rate ratio
+           lower = exp(lower),
+           upper = exp(upper),
+  mean = roundz(mean, 2), # rounding
+         lower = roundz(lower, 2),
+         upper = roundz(upper, 2),
+         ci = paste(lower , ' to ' , upper, sep='')) %>%
+  dplyr::select(term, mean, ci, pvalue)
+ftab = flextable(to_table)%>%
+  autofit() %>%
+  theme_box()
+ftab
+```
+
+
+```{r}
+time_varying =  filter(results_time_varying[[1]]$table, str_detect(parameter, pattern='^diff')) %>%
+  mutate(mean = exp(mean), # rate ratio
+      lower = exp(lower),
+      upper = exp(upper),
       years_since = str_remove_all(parameter, pattern='[^0-9]'),
       years_since = as.numeric(years_since) - 1) # minus 1 so that first year is zero
 # remove later years with extreme uncertainty
@@ -168,12 +355,12 @@ time_varying =  filter(results_time_varying$table, str_detect(parameter, pattern
 
 #
 splot_main = ggplot(data=time_varying, aes(x=years_since, y=mean, ymin=lower, ymax=upper))+
-    geom_hline(lty = 2, yintercept=0)+
+    geom_hline(lty = 2, yintercept=1)+
     geom_ribbon(alpha = 0.2)+
     geom_point(size=2)+
-    geom_line(size = 1.1)+
+    geom_line(linewidth = 1.1)+
     xlab('Years since funding')+
-    ylab('Percent change in publications')+
+    ylab('Rate ratio for publications')+
     theme_bw()+
     theme(panel.grid.minor = element_blank())
 splot_main
@@ -186,33 +373,32 @@ The plot shows no clear benefit to funding on publication counts over time since
 
 ```{r}
 table = mutate(time_varying,
-               lower = roundz(lower, 1),
-               upper = roundz(upper, 1),
+               lower = roundz(lower, 2),
+               upper = roundz(upper, 2),
                ci = paste(lower, ' to ', upper, sep=''),
                pvalue = format.pval(pvalue, digits=2, eps=0.001)) %>%
   dplyr::select(years_since, mean, ci, pvalue) %>%
   rename('years since funding' ='years_since') %>%
   flextable() %>%
   theme_tron_legacy() %>%
-  colformat_double(j=2, digits=1) %>%
+  colformat_double(j=2, digits=2) %>%
   autofit()
 table
 ```
 
-
-### Table of model estimates (yearly publication data, time-varying treatment)
+### Table of estimates (publications per paper, time-varying)
 
 ```{r}
-to_table = filter(results_time_varying$table, 
-    str_detect(parameter, pattern='beta|delta|lambda|gamma|slope.diff')) %>% # do not show intercept
-  mutate(term = parameter_rename(parameter),
+to_table = filter(results_time_varying[[1]]$table, 
+    str_detect(parameter, pattern='beta|gamma|delta|lambda|slope.diff')) %>% # do not show intercept
+  mutate(term = parameter_rename(parameter, papers=TRUE),
   pvalue = format.pval(pvalue, digits=2, eps=0.0001),
-    mean = 100*(exp(mean)- 1), # percent change
-           lower = 100*(exp(lower)- 1),
-           upper = 100*(exp(upper)- 1),
-  mean = roundz(mean, 1), # rounding
-         lower = roundz(lower, 1),
-         upper = roundz(upper, 1),
+  mean = exp(mean), # rate ratio
+           lower = exp(lower),
+           upper = exp(upper),
+  mean = roundz(mean, 2), # rounding
+         lower = roundz(lower, 2),
+         upper = roundz(upper, 2),
          ci = paste(lower , ' to ' , upper, sep='')) %>%
   dplyr::select(term, mean, ci, pvalue)
 ftab = flextable(to_table)%>%
@@ -221,85 +407,47 @@ ftab = flextable(to_table)%>%
 ftab
 ```
 
-The table shows no clear effect of funding or for the interaction between funding and years since funding. 
-
 ###### page break
 
-# Monthly publication counts
+# Scopus only
 
-The models above used annual publication counts, but the funding announcements happened during the year and we assumed the treatment effect began in the year of funding. Hence some papers from the funded year were likely pre-randomisation. To somewhat account for this we used a model of monthly counts instead of annual counts. However, we could only do this for the _Scopus_ and _researchgate_ databases which had the publication date.
+Here we examine the effect of funding on yearly publication counts using the Scopus database only. 
 
-```{r}
-file = c('bayes', 'publication_counts_monthly')
+```{r, include=FALSE}
+file = c('bayes', 'main_publication_scopus_only')
 outfile = make_file(file, only_consent = only_consent)
 if(outfile$exists == FALSE){
+  # model choices:
   pilot = FALSE # run big model
-  source('99_nimble_publications_monthly.R')
-  save(results_monthly, file = outfile$file)
+  # loop through imputations
+  results = list() # list to store results
+  for (imp in 1:n_impute){
+    source('99_nimble_publications_scopus_only.R')
+    results[[imp]] = results_scopus_only
+  }
+  save(results, pilot, file = outfile$file)
 }
 if(outfile$exists == TRUE){
   load(outfile$file)
 }
+results_scopus_only = results # rename
 ```
 
-### Table of estimates (monthly publication data)
+### Table of estimates (yearly publication data - Scopus only)
+
+The table below uses the estimates from a single imputation.
 
 ```{r}
-to_table = filter(results_monthly$table, 
-    str_detect(parameter, pattern='zeta|beta|gamma')) %>% # do not show intercept
+to_table = filter(results_scopus_only[[1]]$table, 
+    str_detect(parameter, pattern='beta|gamma')) %>% # do not show intercept
   mutate(term = parameter_rename(parameter),
-  pvalue = format.pval(pvalue, digits=2, eps=0.0001),
-    mean = 100*(exp(mean)- 1), # percent change
-           lower = 100*(exp(lower)- 1),
-           upper = 100*(exp(upper)- 1),
-  mean = roundz(mean, 1), # rounding
-         lower = roundz(lower, 1),
-         upper = roundz(upper, 1),
-         ci = paste(lower , ' to ' , upper, sep='')) %>%
-  dplyr::select(term, mean, ci, pvalue) 
-ftab = flextable(to_table)%>%
-  autofit() %>%
-  theme_box()
-ftab
-```
-
-The results show no clear effect of funding. 
-
-We added January as a predictor because exploratory analysis showed a clear increase in papers on this month. This is because some journals do not include an exact month in the date and all papers have a date of January.
-
-
-###### page break
-
-# Time-varying treatment for monthly publication data
-
-The previous model assumed a fixed effect for funding. Here we allow the effect of funding to vary over time.
-
-```{r}
-file = c('bayes','real_model_monthly_varying')
-outfile = make_file(file, only_consent = only_consent)
-if(outfile$exists == FALSE){
-  pilot = FALSE # run big model
-  source('99_nimble_publications_monthly_time_varying.R')
-  save(results_yrmon_monthly_varying, file = outfile$file)
-}
-if(outfile$exists == TRUE){
-  load(outfile$file)
-}
-```
-
-### Table of estimates (monthly publication data)
-
-```{r}
-to_table = filter(results_yrmon_monthly_varying$table, 
-    str_detect(parameter, pattern='zeta|beta|lambda|delta|gamma|slope.diff')) %>% # do not show intercept
-  mutate(term = parameter_rename(parameter),
-  pvalue = format.pval(pvalue, digits=2, eps=0.0001),
-    mean = 100*(exp(mean)- 1), # percent change
-           lower = 100*(exp(lower)- 1),
-           upper = 100*(exp(upper)- 1),
-  mean = roundz(mean, 1), # rounding
-         lower = roundz(lower, 1),
-         upper = roundz(upper, 1),
+  pvalue = format.pval(pvalue, digits=2, eps=0.0001), # not in imputed data
+    mean = exp(mean), # rate ratio
+           lower = exp(lower),
+           upper = exp(upper),
+  mean = roundz(mean, 2), # rounding
+         lower = roundz(lower, 2),
+         upper = roundz(upper, 2),
          ci = paste(lower , ' to ' , upper, sep='')) %>%
   dplyr::select(term, mean, ci, pvalue)
 ftab = flextable(to_table)%>%
@@ -309,56 +457,19 @@ ftab
 ```
 
 
-```{r}
-time_varying =  filter(results_yrmon_monthly_varying$table, str_detect(parameter, pattern='^diff')) %>%
-  mutate(mean = 100*(exp(mean)- 1), # percent change
-      lower = 100*(exp(lower)- 1),
-      upper = 100*(exp(upper)- 1),
-      months_since = str_remove_all(parameter, pattern='[^0-9]'),
-      months_since = as.numeric(months_since),
-      years_since = months_since*12) # minus 1 so that first year is zero
 
-#
-splot_main = ggplot(data=time_varying, aes(x=years_since, y=mean, ymin=lower, ymax=upper))+
-    geom_hline(lty = 2, yintercept=0)+
-    geom_ribbon(alpha = 0.2)+
-    geom_point(size=2)+
-    geom_line(size = 1.1)+
-    xlab('Years since funding')+
-    ylab('Percent change in publications')+
-    theme_bw()+
-    theme(panel.grid.minor = element_blank())
-splot_main
-```
-
-### Table of time-varying estimates (citation data)
-
-```{r}
-table = mutate(time_varying,
-               lower = roundz(lower, 1),
-               upper = roundz(upper, 1),
-               ci = paste(lower, ' to ', upper, sep=''),
-               pvalue = format.pval(pvalue, digits=2, eps=0.001)) %>%
-  dplyr::select(years_since, mean, ci, pvalue) %>%
-  rename('years since funding' ='years_since') %>%
-  flextable() %>%
-  theme_tron_legacy() %>%
-  colformat_double(j=2, digits=1) %>%
-  autofit()
-table
-```
 
 ###### page break
 
 # Citations
 
 ```{r, include=FALSE}
-file = c('bayes', 'main_citation_counts')
+# Bayes model does not converge, had to use alternative model
+file = c('bayes', 'main_citation_counts_non_bayes')
 outfile = make_file(file, only_consent = only_consent)
 if(outfile$exists == FALSE){
   # model choices:
-  pilot = FALSE # run big model
-  source('99_nimble_citations.R')
+  source('99_nimble_citations_alternative.R')
   save(results_citations, file = outfile$file)
 }
 if(outfile$exists == TRUE){
@@ -368,17 +479,17 @@ if(outfile$exists == TRUE){
 
 ### Table of estimates (citation data)
 
-```{r}
+```{r table_citations}
 to_table = filter(results_citations$table, 
     str_detect(parameter, pattern='beta|gamma')) %>% # do not show intercept
   mutate(term = parameter_rename(parameter, papers=FALSE),
   pvalue = format.pval(pvalue, digits=2, eps=0.0001),
-    mean = 100*(exp(mean)- 1), # percent change
-           lower = 100*(exp(lower)- 1),
-           upper = 100*(exp(upper)- 1),
-  mean = roundz(mean, 1), # rounding
-         lower = roundz(lower, 1),
-         upper = roundz(upper, 1),
+    mean = exp(mean), # rate ratio
+           lower = exp(lower),
+           upper = exp(upper),
+  mean = roundz(mean, 2), # rounding
+         lower = roundz(lower, 2),
+         upper = roundz(upper, 2),
          ci = paste(lower , ' to ' , upper, sep='')) %>%
   dplyr::select(term, mean, ci, pvalue)
 ftab = flextable(to_table)%>%
@@ -392,12 +503,11 @@ ftab
 # Time-varying citations
 
 ```{r, include=FALSE}
-file = c('bayes', 'main_citation_time_varying')
+# bayes version not converging
+file = c('bayes', 'main_citation_time_varying_non_bayes')
 outfile = make_file(file, only_consent = only_consent)
 if(outfile$exists == FALSE){
-  # model choices:
-  pilot = FALSE # run big model
-  source('99_nimble_citations_time_varying.R')
+  source('99_nimble_citations_time_varying_alternative.R')
   save(results_citations_time_varying, file = outfile$file)
 }
 if(outfile$exists == TRUE){
@@ -409,15 +519,15 @@ if(outfile$exists == TRUE){
 
 ```{r}
 to_table = filter(results_citations_time_varying$table, 
-    str_detect(parameter, pattern='beta|gamma|delta|lambda|slope.diff')) %>% # do not show intercept
+    str_detect(parameter, pattern='beta|gamma|years_since|interaction')) %>% # do not show intercept
   mutate(term = parameter_rename(parameter, papers=FALSE),
   pvalue = format.pval(pvalue, digits=2, eps=0.0001),
-    mean = 100*(exp(mean)- 1), # percent change
-           lower = 100*(exp(lower)- 1),
-           upper = 100*(exp(upper)- 1),
-  mean = roundz(mean, 1), # rounding
-         lower = roundz(lower, 1),
-         upper = roundz(upper, 1),
+    mean = exp(mean), # rate ratio
+           lower = exp(lower),
+           upper = exp(upper),
+  mean = roundz(mean, 2), # rounding
+         lower = roundz(lower, 2),
+         upper = roundz(upper, 2),
          ci = paste(lower , ' to ' , upper, sep='')) %>%
   dplyr::select(term, mean, ci, pvalue)
 ftab = flextable(to_table)%>%
@@ -427,25 +537,41 @@ ftab
 ```
 
 ```{r}
-time_varying =  filter(results_citations_time_varying$table, str_detect(parameter, pattern='^diff')) %>%
-  mutate(mean = 100*(exp(mean)- 1), # percent change
-      lower = 100*(exp(lower)- 1),
-      upper = 100*(exp(upper)- 1),
-      months_since = str_remove_all(parameter, pattern='[^0-9]'),
-      months_since = as.numeric(months_since),
-      years_since = months_since*12) # minus 1 so that first year is zero
-
-#
-splot_main = ggplot(data=time_varying, aes(x=years_since, y=mean, ymin=lower, ymax=upper))+
-    geom_hline(lty = 2, yintercept=0)+
+bayes_version = function(){
+  time_varying =  filter(results_citations_time_varying$table, str_detect(parameter, pattern='^diff')) %>%
+    mutate(mean = exp(mean), # percent change
+           lower = exp(lower),
+           upper = exp(upper),
+           years_since = str_remove_all(parameter, pattern='[^0-9]'),
+           years_since = as.numeric(years_since),
+           years_since = years_since-1) # minus 1 so that first year is zero
+  splot_main = ggplot(data=time_varying, aes(x=years_since, y=mean, ymin=lower, ymax=upper))+
+    geom_hline(lty = 2, yintercept=1)+
     geom_ribbon(alpha = 0.2)+
     geom_point(size=2)+
     geom_line(size = 1.1)+
     xlab('Years since funding')+
-    ylab('Percent change in citations')+
+    ylab('Rate ratio for citations')+
     theme_bw()+
     theme(panel.grid.minor = element_blank())
+}
+# non-Bayes version
+time_varying = results_citations_time_varying$predict
+splot_main = ggplot(data=time_varying, aes(x=years_since, y=fitted, col=factor(funded)))+
+    scale_color_manual(NULL, values=c('dodgerblue','darkseagreen'))+ # matching colours used in other plots
+    geom_point(size=2)+
+    geom_line(size = 1.1)+
+    xlab('Years since randomisation')+
+    ylab('Predicted citations')+
+    theme_bw()+
+    theme(legend.position = c(0.18,0.8),
+          panel.grid.minor = element_blank())
+#
 splot_main
+# export to plot
+jpeg('figures/citations_time_varying.jpg', width=5, height=4, units='in', res=500, quality=100)
+print(splot_main)
+invisible(dev.off())
 ```
 
 ###### page break
@@ -461,7 +587,7 @@ if(outfile$exists == FALSE){
   # model choices:
   pilot = FALSE # run big model
   source('99_nimble_citations_per_paper.R')
-  save(results_citations_per_paper, file = outfile$file)
+  save(results_citations_per_paper, pilot, file = outfile$file)
 }
 if(outfile$exists == TRUE){
   load(outfile$file)
@@ -472,12 +598,9 @@ if(outfile$exists == TRUE){
 
 ```{r}
 to_table = filter(results_citations_per_paper$table, 
-    str_detect(parameter, pattern='beta|gamma')) %>% # do not show intercept
-  mutate(term = parameter_rename(parameter, papers=FALSE),
-  pvalue = format.pval(pvalue, digits=2, eps=0.0001),
-    mean = 100*(exp(mean)- 1), # percent change
-           lower = 100*(exp(lower)- 1),
-           upper = 100*(exp(upper)- 1),
+    str_detect(rowname, pattern='beta|gamma')) %>% # do not show intercept
+  mutate(term = parameter_rename(rowname, papers=FALSE),
+  pvalue = format.pval(Bayes_prob, digits=2, eps=0.0001),
   mean = roundz(mean, 1), # rounding
          lower = roundz(lower, 1),
          upper = roundz(upper, 1),
@@ -488,6 +611,8 @@ ftab = flextable(to_table)%>%
   theme_box()
 ftab
 ```
+
+The results are on an absolute scale, which is citations per paper. There is no effect of funding on the number of citations per paper. 
 
 ###### page break
 
@@ -500,7 +625,7 @@ if(outfile$exists == FALSE){
   # model choices:
   pilot = FALSE # run big model
   source('99_nimble_citations_per_paper_time_varying.R')
-  save(results_citations_per_paper_time_varying, file = outfile$file)
+  save(results_citations_per_paper_time_varying, pilot, file = outfile$file)
 }
 if(outfile$exists == TRUE){
   load(outfile$file)
@@ -509,12 +634,9 @@ if(outfile$exists == TRUE){
 
 ```{r}
 time_varying =  filter(results_citations_per_paper_time_varying$table, str_detect(parameter, pattern='^diff')) %>%
-  mutate(mean = 100*(exp(mean)- 1), # percent change
-      lower = 100*(exp(lower)- 1),
-      upper = 100*(exp(upper)- 1),
-      months_since = str_remove_all(parameter, pattern='[^0-9]'),
-      months_since = as.numeric(months_since),
-      years_since = months_since-1) #  /
+  mutate(years_since = str_remove_all(parameter, pattern='[^0-9]'),
+      years_since = as.numeric(years_since),
+      years_since = years_since - 1) #  /
 #
 splot_main = ggplot(data=time_varying, aes(x=years_since, y=mean, ymin=lower, ymax=upper))+
     geom_hline(lty = 2, yintercept=0)+
@@ -528,16 +650,13 @@ splot_main = ggplot(data=time_varying, aes(x=years_since, y=mean, ymin=lower, ym
 splot_main
 ```
 
-### Table of estimates (citations per paper)
+### Table of estimates (citations per paper, time-varying)
 
 ```{r}
 to_table = filter(results_citations_per_paper_time_varying$table, 
     str_detect(parameter, pattern='beta|gamma|delta|lambda|slope.diff')) %>% # do not show intercept
   mutate(term = parameter_rename(parameter, papers=FALSE),
   pvalue = format.pval(pvalue, digits=2, eps=0.0001),
-    mean = 100*(exp(mean)- 1), # percent change
-           lower = 100*(exp(lower)- 1),
-           upper = 100*(exp(upper)- 1),
   mean = roundz(mean, 1), # rounding
          lower = roundz(lower, 1),
          upper = roundz(upper, 1),
@@ -561,7 +680,7 @@ if(outfile$exists == FALSE){
   # model choices:
   pilot = FALSE # run big model
   source('99_nimble_altmetric.R')
-  save(results_altmetric, file = outfile$file)
+  save(results_altmetric, pilot, file = outfile$file)
 }
 if(outfile$exists == TRUE){
   load(outfile$file)
@@ -575,10 +694,7 @@ to_table = filter(results_altmetric$table,
     str_detect(parameter, pattern='beta|gamma')) %>% # do not show intercept
   mutate(term = parameter_rename(parameter, papers=FALSE),
   pvalue = format.pval(pvalue, digits=2, eps=0.0001),
-    mean = 100*(exp(mean)- 1), # percent change
-           lower = 100*(exp(lower)- 1),
-           upper = 100*(exp(upper)- 1),
-  mean = roundz(mean, 1), # rounding
+    mean = roundz(mean, 1), # rounding
          lower = roundz(lower, 1),
          upper = roundz(upper, 1),
          ci = paste(lower , ' to ' , upper, sep='')) %>%
@@ -589,6 +705,7 @@ ftab = flextable(to_table)%>%
 ftab
 ```
 
+The estimate are on an absolute scale.
 
 ###### page break
 
@@ -601,7 +718,7 @@ if(outfile$exists == FALSE){
   # model choices:
   pilot = FALSE # run big model
   source('99_nimble_altmetric_time_varying.R')
-  save(results_altmetric_time_varying, file = outfile$file)
+  save(results_altmetric_time_varying, pilot, file = outfile$file)
 }
 if(outfile$exists == TRUE){
   load(outfile$file)
@@ -615,9 +732,6 @@ to_table = filter(results_altmetric_time_varying$table,
     str_detect(parameter, pattern='beta|gamma|lambda|delta|slope.diff')) %>% # do not show intercept
   mutate(term = parameter_rename(parameter, papers=FALSE),
   pvalue = format.pval(pvalue, digits=2, eps=0.0001),
-    mean = 100*(exp(mean)- 1), # percent change
-           lower = 100*(exp(lower)- 1),
-           upper = 100*(exp(upper)- 1),
   mean = roundz(mean, 1), # rounding
          lower = roundz(lower, 1),
          upper = roundz(upper, 1),
@@ -671,113 +785,99 @@ ggsurvplot(sfit,
 
 #### Main effect of funding
 
-The table below shows the main effect of funding.
+The table below shows the main effect of funding for the rate ratios.
 
-```{r}
-t1 = filter(results_main$table, 
+```{r relative}
+t1 = filter(results_main[[1]]$table,  # use first imputation, barely matters
     str_detect(parameter, pattern='gamma'))
-t2 = filter(results_time_varying$table, 
-    str_detect(parameter, pattern='gamma'))
-t3 = filter(results_monthly$table, 
-    str_detect(parameter, pattern='gamma'))
-t4 = filter(results_yrmon_monthly_varying$table, 
+t2 = filter(results_time_varying[[1]]$table, 
     str_detect(parameter, pattern='gamma'))
 t5 = filter(results_citations$table, 
     str_detect(parameter, pattern='gamma'))
 t6 = filter(results_citations_time_varying$table, 
     str_detect(parameter, pattern='gamma'))
-t7 = filter(results_citations_per_paper$table, 
-    str_detect(parameter, pattern='gamma'))
+summary_table = bind_rows(t1, t2, t5, t6, .id='id') %>%
+  mutate(
+    outcome = case_when(
+      id == 1 ~ 'Publications',
+      id == 2 ~ 'Publications',
+      id == 3 ~ 'Citations',
+      id == 4 ~ 'Citations'),
+  time_varying = case_when(
+      id == 1 ~ 'No',
+      id == 2 ~ 'Yes',
+      id == 3 ~ 'No',
+      id == 4 ~ 'Yes')) %>%
+  mutate(pvalue = format.pval(pvalue, digits = 2, eps=0.0001),
+    mean = exp(mean), # RR
+           lower = exp(lower),
+           upper = exp(upper),
+  mean = roundz(mean, 1), # rounding
+         lower = roundz(lower, 1),
+         upper = roundz(upper, 1),
+         ci = paste(lower , ' to ' , upper, sep='')) %>%
+  dplyr::select(outcome, time_varying, mean, ci, pvalue)
+ftab = flextable(summary_table) %>%
+  theme_box() %>%
+  autofit() %>%
+  merge_v(j=1)
+ftab
+```
+
+The table below shows the main effect of funding for the absolute estimates.
+
+
+```{r abs}
+t7 = rename(results_citations_per_paper$table, 'parameter' = 'rowname') %>%
+  filter(str_detect(parameter, pattern='gamma'))
 t8 = filter(results_citations_per_paper_time_varying$table, 
     str_detect(parameter, pattern='gamma'))
 t9 = filter(results_altmetric$table, 
     str_detect(parameter, pattern='gamma'))
 t10 = filter(results_altmetric_time_varying $table, 
     str_detect(parameter, pattern='gamma'))
-summary_table = bind_rows(t1, t2, t3, t4, t5, t6, t7, t8, t9, t10, .id='id') %>%
+summary_table = bind_rows(t7, t8, t9, t10, .id='id') %>%
   mutate(
     outcome = case_when(
-      id == 1 ~ 'Publications',
-      id == 2 ~ 'Publications',
-      id == 3 ~ 'Publications',
-      id == 4 ~ 'Publications',
-      id == 5 ~ 'Citations',
-      id == 6 ~ 'Citations',
-      id == 7 ~ 'Citations per paper',
-      id == 8 ~ 'Citations per paper',
-      id == 9 ~ 'Altmetric',
-      id == 10 ~ 'Altmetric'
-  ),
-  time = case_when(
-      id == 1 ~ 'Yearly',
-      id == 2 ~ 'Yearly',
-      id == 3 ~ 'Monthly',
-      id == 4 ~ 'Monthly',
-      id == 5 ~ 'Yearly',
-      id == 6 ~ 'Yearly',
-      id == 7 ~ 'Yearly',
-      id == 8 ~ 'Yearly',
-      id == 9 ~ 'Yearly',
-      id == 10 ~ 'Yearly'
+      id == 1 ~ 'Citations per paper',
+      id == 2 ~ 'Citations per paper',
+      id == 3 ~ 'Altmetric',
+      id == 4 ~ 'Altmetric'
   ),
   time_varying = case_when(
       id == 1 ~ 'No',
       id == 2 ~ 'Yes',
       id == 3 ~ 'No',
-      id == 4 ~ 'Yes',
-      id == 5 ~ 'No',
-      id == 6 ~ 'Yes',
-      id == 7 ~ 'No',
-      id == 8 ~ 'Yes',
-      id == 9 ~ 'No',
-      id == 10 ~ 'Yes'
+      id == 4 ~ 'Yes'
   )) %>%
   mutate(pvalue = format.pval(pvalue, digits = 2, eps=0.0001),
-    mean = 100*(exp(mean)- 1), # percent change
-           lower = 100*(exp(lower)- 1),
-           upper = 100*(exp(upper)- 1),
-  mean = roundz(mean, 1), # rounding
+    mean = roundz(mean, 1), # rounding
          lower = roundz(lower, 1),
          upper = roundz(upper, 1),
          ci = paste(lower , ' to ' , upper, sep='')) %>%
-  dplyr::select(outcome, time, time_varying, mean, ci, pvalue)
+  dplyr::select(outcome, time_varying, mean, ci, pvalue)
 ftab = flextable(summary_table) %>%
   theme_box() %>%
   autofit() %>%
-  merge_v(j=1:2)
+  merge_v(j=1)
 ftab
 ```
+
 
 #### Change in the effect of funding over time
 
-The table below shows the main effect of funding.
+The table below shows the main effect of funding for the rate ratios.
 
 ```{r}
-t2 = filter(results_time_varying$table, 
-    str_detect(parameter, pattern='slope.diff'))
-t4 = filter(results_yrmon_monthly_varying$table, 
+t2 = filter(results_time_varying[[1]]$table, 
     str_detect(parameter, pattern='slope.diff'))
 t6 = filter(results_citations_time_varying$table, 
     str_detect(parameter, pattern='slope.diff'))
-t8 = filter(results_citations_per_paper_time_varying$table, 
-    str_detect(parameter, pattern='slope.diff'))
-t10 = filter(results_altmetric_time_varying$table, 
-    str_detect(parameter, pattern='slope.diff'))
-summary_table = bind_rows(t2, t4, t6, t8, t10, .id='id') %>%
+summary_table = bind_rows(t2, t6, .id='id') %>%
   mutate(
     outcome = case_when(
       id == 1 ~ 'Publications',
-      id == 2 ~ 'Publications',
-      id == 3 ~ 'Citations',
-      id == 4 ~ 'Citations per paper',
-      id == 5 ~ 'Altmetric'
-  ),
-  time = case_when(
-      id == 1 ~ 'Yearly',
-      id == 2 ~ 'Monthly',
-      id == 3 ~ 'Yearly',
-      id == 4 ~ 'Yearly',
-      id == 5 ~ 'Yearly'
+      id == 2 ~ 'Citations'
   )) %>%
   mutate(pvalue = format.pval(pvalue, digits = 2, eps=0.0001),
     mean = 100*(exp(mean)- 1), # percent change
@@ -787,24 +887,72 @@ summary_table = bind_rows(t2, t4, t6, t8, t10, .id='id') %>%
          lower = roundz(lower, 1),
          upper = roundz(upper, 1),
          ci = paste(lower , ' to ' , upper, sep='')) %>%
-  dplyr::select(outcome, time, mean, ci, pvalue)
+  dplyr::select(outcome, mean, ci, pvalue)
 ftab = flextable(summary_table) %>%
   theme_box() %>%
   autofit() %>%
-  merge_v(j=1:2)
+  merge_v(j=1)
 ftab
 ```
+
+The table below shows the main effect of funding over time for the absolute estimates.
+
+```{r}
+t2 = filter(results_time_varying[[1]]$table, 
+    str_detect(parameter, pattern='slope.diff'))
+t6 = filter(results_citations_time_varying$table, 
+    str_detect(parameter, pattern='slope.diff'))
+summary_table = bind_rows(t8, t10, .id='id') %>%
+  mutate(
+    outcome = case_when(
+      id == 1 ~ 'Citations per paper',
+      id == 2 ~ 'Altmetric'
+  )) %>%
+  mutate(pvalue = format.pval(pvalue, digits = 2, eps=0.0001),
+  mean = roundz(mean, 1), # rounding
+         lower = roundz(lower, 1),
+         upper = roundz(upper, 1),
+         ci = paste(lower , ' to ' , upper, sep='')) %>%
+  dplyr::select(outcome, mean, ci, pvalue)
+ftab = flextable(summary_table) %>%
+  theme_box() %>%
+  autofit() %>%
+  merge_v(j=1)
+ftab
+```
+
 
 ###### page break
 
 # Appendix
 
-Here we show some additional results for: 1) variance-covariance matrix for the databases, 2) the model residuals.
+Here we show some additional results for: 1) variance-covariance matrix and correlation matrix for the three databases, 2) the model residuals.
 
 ### Variance-covariance matrix (yearly publication data)
 
 ```{r}
-cmat = mutate(results_main$covmat, 
+cmat = mutate(results_main[[1]]$covmat, 
+              row = case_when(
+                row==1 ~ 'Scholar',
+                row==2 ~ 'Scopus',
+                row==3 ~ 'Researchgate'
+              ))
+names(cmat) = c('row','Scholar','Scopus','Researchgate')
+ftab  = flextable(cmat) %>%
+  colformat_double(digits=2) %>%
+  autofit() %>%
+  theme_box()
+ftab
+```
+
+### Correlation matrix (yearly publication data)
+
+```{r}
+cormat = cov2cor(as.matrix(results_main[[1]]$covmat[,-1])) %>%
+  data.frame() %>%
+  mutate(row = 1:3) %>%
+  select(row, everything())
+cmat = mutate(cormat, 
               row = case_when(
                 row==1 ~ 'Scholar',
                 row==2 ~ 'Scopus',
@@ -821,7 +969,7 @@ ftab
 ### Residual checks (yearly publication data)
 
 ```{r, fig.width=8}
-res = results_main$residuals
+res = results_main[[1]]$residuals
 hplot = ggplot(data=res, aes(x=residual))+
   geom_histogram(col='grey44', fill='skyblue')+
   g.theme+
@@ -838,7 +986,7 @@ The relatively large negative residual in the Scopus database is for a relativel
 ### Residual checks (yearly publication data, time-varying effect)
 
 ```{r, fig.width=8}
-res = results_time_varying$residuals
+res = results_time_varying[[1]]$residuals
 hplot = ggplot(data=res, aes(x=residual))+
   geom_histogram(col='grey44', fill='skyblue')+
   g.theme+
@@ -850,21 +998,6 @@ hplot
 
 The histograms are centered on zero and roughly symmetric. 
 
-### Residual checks (monthly publication data)
-
-```{r, fig.width=8}
-res = results_monthly$residuals
-hplot = ggplot(data=res, aes(x=residual))+
-  geom_histogram(col='grey44', fill='skyblue')+
-  g.theme+
-  xlab('Residual')+
-  ylab('Count')+
-  facet_wrap(~database, scales='free')
-hplot
-#
-```
-
-The pattern in the shape of the residuals arises from the large number of months with zero publications. This causes a mode in the residuals and a loss of smooth shape. There was no clear pattern in the residuals by calendar time or years since funding.
 
 ### Residual checks (citations)
 
@@ -943,3 +1076,75 @@ years_follow = group_by(analysis_ready, number) %>%
 ```
 
 The total years of follow-up was `r years_follow$total`.
+
+# Convergence checks
+
+Checking the convergence of the MCMC.
+
+###### page break
+
+### Densities (publication counts)
+
+```{r, fig.height=8}
+library(ggmcmc) # for chain diagnostics
+chains = results_main[[1]]$chains
+c1 = mcmc(data= chains[[1]], start = 1, end = dim(chains[[1]])[1])
+c2 = mcmc(data= chains[[2]], start = 1, end = dim(chains[[1]])[1])
+chains = as.mcmc.list(list(c1,c2))
+res = ggs(S = chains, burnin=FALSE) # make into object for ggmcmc
+ggs_density(res)
+```
+
+###### page break
+
+### Traces (publication counts)
+
+```{r, fig.height=8}
+ggs_traceplot(res)
+```
+
+
+
+###### page break
+
+### Densities (citations per paper)
+
+```{r, fig.height=8}
+chains = results_citations_per_paper$chains
+c1 = mcmc(data= chains[[1]], start = 1, end = dim(chains[[1]])[1])
+c2 = mcmc(data= chains[[2]], start = 1, end = dim(chains[[1]])[1])
+chains = as.mcmc.list(list(c1,c2))
+res = ggs(S = chains, burnin=FALSE) # make into object for ggmcmc
+ggs_density(res)
+```
+
+###### page break
+
+### Traces (citations per paper)
+
+```{r, fig.height=8}
+ggs_traceplot(res)
+```
+
+
+###### page break
+
+### Densities (altmetric)
+
+```{r, fig.height=8}
+chains = results_altmetric$chains
+c1 = mcmc(data= chains[[1]], start = 1, end = dim(chains[[1]])[1])
+c2 = mcmc(data= chains[[2]], start = 1, end = dim(chains[[1]])[1])
+chains = as.mcmc.list(list(c1,c2))
+res = ggs(S = chains, burnin=FALSE) # make into object for ggmcmc
+ggs_density(res)
+```
+
+###### page break
+
+### Traces (altmetric)
+
+```{r, fig.height=8}
+ggs_traceplot(res)
+```
+
