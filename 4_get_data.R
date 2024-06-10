@@ -17,7 +17,7 @@ all_years = group_by(other_funding, number) %>%
   pivot_longer(cols=c('start','end'), values_to = 'year') %>%
   group_by(number) %>% 
   complete(year = min(year):max(year), fill = list(active = FALSE))  %>%
-  select(-name) %>%
+  dplyr::select(-name) %>%
   unique()
 
 #

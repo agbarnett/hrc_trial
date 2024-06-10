@@ -746,12 +746,14 @@ make_bugs_results = function(in_bugs){
   return(table)
 }
 
-## parameter rename for tables of parameter estiamtes
-parameter_rename = function(x, papers=TRUE, monthly=FALSE){
+## parameter rename for tables of parameter estimates
+parameter_rename = function(x, which_est = 'papers', monthly=FALSE){
   case_when(
     x == 'zeta' ~ 'January',
-    x == 'beta' & papers==TRUE ~ 'Double pre-randomisation papers',
-    x == 'beta' & papers==FALSE ~ 'Double pre-randomisation citations',
+    x == 'beta' & which_est == 'papers' ~ 'Double pre-randomisation papers',
+    x == 'beta' & which_est == 'citations' ~ 'Double pre-randomisation citations',
+    x == 'beta' & which_est == 'altmetric' ~ 'Pre-randomisation Altmetric',
+    x == 'beta' & which_est == 'citations_per_paper' ~ 'Pre-randomisation citations per paper',
     x == 'eta' ~ 'Year = 2022',
   x == 'gamma' ~ 'Funding',
   x == 'years_since' ~ 'Years since randomisation',

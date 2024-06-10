@@ -33,9 +33,10 @@ lplot = ggplot(data=to_plot, aes(x=year, y=new_num, col=factor(res_num), group=n
   scale_y_continuous(breaks=NULL, expand=c(0.01,0.01))+
   theme(legend.position=c(0.15,0.85))
 lplot
-jpeg('figures/follow_up.jpg', width=4.5, height=5.5, units='in', res=600, quality=100)
-print(lplot)
-dev.off()
+# do not export, potentially identifies individuals
+#jpeg('figures/follow_up.jpg', width=4.5, height=4, units='in', res=600, quality=100)
+#print(lplot)
+#dev.off()
 
 # calculate years of follow-up
 max_year = 2021

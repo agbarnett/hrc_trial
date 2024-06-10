@@ -1,7 +1,5 @@
 # 99_nimble_altmetric.R
-# using nimble to run Bayesian model of citation counts
-# no need for offset as fewer papers cancel fewer citations
-# version with citations per paper outcome
+# using nimble to run Bayesian model of altmetric
 # August 2022
 seed = rep(0, 2)
 seed[1] = TeachingDemos::char2seed('Colchester')

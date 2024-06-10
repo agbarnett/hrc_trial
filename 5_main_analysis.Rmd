@@ -14,7 +14,7 @@ output:
 knitr::opts_chunk$set(echo = FALSE, warning=FALSE, message=FALSE, error=FALSE, comment='', dpi=400)
 options(width=1000) # Wide pages
 options(scipen=999) # avoid scientific presentation
-source('99__functions.R')
+source('99_functions.R')
 library(dplyr)
 library(tidyr)
 library(stringr)
@@ -115,7 +115,8 @@ The follow-up dates were `r format(scholar_date, '%d-%b-%Y')` for _Google Schola
 First we examine the effect of funding on yearly publication counts. 
 
 ```{r, include=FALSE}
-file = c('bayes', 'main_publication_counts')
+#file = c('bayes', 'main_publication_counts_loge') # alternative version with base e log for reviewer
+file = c('bayes', 'main_publication_counts') # 
 outfile = make_file(file, only_consent = only_consent)
 if(outfile$exists == FALSE){
   # model choices:
@@ -391,7 +392,7 @@ table
 ```{r}
 to_table = filter(results_time_varying[[1]]$table, 
     str_detect(parameter, pattern='beta|gamma|delta|lambda|slope.diff')) %>% # do not show intercept
-  mutate(term = parameter_rename(parameter, papers=TRUE),
+  mutate(term = parameter_rename(parameter),
   pvalue = format.pval(pvalue, digits=2, eps=0.0001),
   mean = exp(mean), # rate ratio
            lower = exp(lower),
@@ -457,6 +458,54 @@ ftab
 ```
 
 
+###### page break
+
+# Without researchgate
+
+Here we examine the effect of funding on yearly publication counts without researchgate. 
+
+```{r, include=FALSE}
+file = c('bayes', 'main_publication_no_researchgate')
+outfile = make_file(file, only_consent = only_consent)
+if(outfile$exists == FALSE){
+  # model choices:
+  pilot = FALSE # run big model
+  # loop through imputations
+  results = list() # list to store results
+  for (imp in 1:n_impute){
+    source('99_nimble_publications_no_researchgate.R')
+    results[[imp]] = results_no_researchgate
+  }
+  save(results, pilot, file = outfile$file)
+}
+if(outfile$exists == TRUE){
+  load(outfile$file)
+}
+results_no_researchgate = results # rename
+```
+
+### Table of estimates (yearly publication data - without researchgate)
+
+The table below uses the estimates from a single imputation.
+
+```{r}
+to_table = filter(results_no_researchgate[[1]]$table, 
+    str_detect(parameter, pattern='beta|gamma')) %>% # do not show intercept
+  mutate(term = parameter_rename(parameter),
+  pvalue = format.pval(pvalue, digits=2, eps=0.0001), # not in imputed data
+    mean = exp(mean), # rate ratio
+           lower = exp(lower),
+           upper = exp(upper),
+  mean = roundz(mean, 2), # rounding
+         lower = roundz(lower, 2),
+         upper = roundz(upper, 2),
+         ci = paste(lower , ' to ' , upper, sep='')) %>%
+  dplyr::select(term, mean, ci, pvalue)
+ftab = flextable(to_table)%>%
+  autofit() %>%
+  theme_box()
+ftab
+```
 
 
 ###### page break
@@ -482,7 +531,7 @@ if(outfile$exists == TRUE){
 ```{r table_citations}
 to_table = filter(results_citations$table, 
     str_detect(parameter, pattern='beta|gamma')) %>% # do not show intercept
-  mutate(term = parameter_rename(parameter, papers=FALSE),
+  mutate(term = parameter_rename(parameter, which_est = 'citations'),
   pvalue = format.pval(pvalue, digits=2, eps=0.0001),
     mean = exp(mean), # rate ratio
            lower = exp(lower),
@@ -520,7 +569,7 @@ if(outfile$exists == TRUE){
 ```{r}
 to_table = filter(results_citations_time_varying$table, 
     str_detect(parameter, pattern='beta|gamma|years_since|interaction')) %>% # do not show intercept
-  mutate(term = parameter_rename(parameter, papers=FALSE),
+  mutate(term = parameter_rename(parameter, which_est = 'citations'),
   pvalue = format.pval(pvalue, digits=2, eps=0.0001),
     mean = exp(mean), # rate ratio
            lower = exp(lower),
@@ -555,11 +604,13 @@ bayes_version = function(){
     theme_bw()+
     theme(panel.grid.minor = element_blank())
 }
-# non-Bayes version
+
+## non-Bayes version
 time_varying = results_citations_time_varying$predict
-splot_main = ggplot(data=time_varying, aes(x=years_since, y=fitted, col=factor(funded)))+
+splot_main = ggplot(data=time_varying, aes(x=years_since, y=fitted, ymin=lwr, ymax=upr, col=factor(funded)))+
     scale_color_manual(NULL, values=c('dodgerblue','darkseagreen'))+ # matching colours used in other plots
-    geom_point(size=2)+
+   # geom_point(size=2)+
+  geom_ribbon(alpha=0.2)+ # 
     geom_line(size = 1.1)+
     xlab('Years since randomisation')+
     ylab('Predicted citations')+
@@ -573,6 +624,8 @@ jpeg('figures/citations_time_varying.jpg', width=5, height=4, units='in', res=50
 print(splot_main)
 invisible(dev.off())
 ```
+
+The shaded areas are 80% confidence intervals. 
 
 ###### page break
 
@@ -599,7 +652,7 @@ if(outfile$exists == TRUE){
 ```{r}
 to_table = filter(results_citations_per_paper$table, 
     str_detect(rowname, pattern='beta|gamma')) %>% # do not show intercept
-  mutate(term = parameter_rename(rowname, papers=FALSE),
+  mutate(term = parameter_rename(rowname, which_est = 'citations_per_paper'),
   pvalue = format.pval(Bayes_prob, digits=2, eps=0.0001),
   mean = roundz(mean, 1), # rounding
          lower = roundz(lower, 1),
@@ -655,7 +708,7 @@ splot_main
 ```{r}
 to_table = filter(results_citations_per_paper_time_varying$table, 
     str_detect(parameter, pattern='beta|gamma|delta|lambda|slope.diff')) %>% # do not show intercept
-  mutate(term = parameter_rename(parameter, papers=FALSE),
+  mutate(term = parameter_rename(parameter, which_est ='citations_per_paper'),
   pvalue = format.pval(pvalue, digits=2, eps=0.0001),
   mean = roundz(mean, 1), # rounding
          lower = roundz(lower, 1),
@@ -692,7 +745,7 @@ if(outfile$exists == TRUE){
 ```{r}
 to_table = filter(results_altmetric$table, 
     str_detect(parameter, pattern='beta|gamma')) %>% # do not show intercept
-  mutate(term = parameter_rename(parameter, papers=FALSE),
+  mutate(term = parameter_rename(parameter, which_est = 'altmetric'),
   pvalue = format.pval(pvalue, digits=2, eps=0.0001),
     mean = roundz(mean, 1), # rounding
          lower = roundz(lower, 1),
@@ -730,7 +783,7 @@ if(outfile$exists == TRUE){
 ```{r}
 to_table = filter(results_altmetric_time_varying$table, 
     str_detect(parameter, pattern='beta|gamma|lambda|delta|slope.diff')) %>% # do not show intercept
-  mutate(term = parameter_rename(parameter, papers=FALSE),
+  mutate(term = parameter_rename(parameter, which_est = 'altmetric'),
   pvalue = format.pval(pvalue, digits=2, eps=0.0001),
   mean = roundz(mean, 1), # rounding
          lower = roundz(lower, 1),
@@ -753,7 +806,7 @@ ftab
 # model probability of being unemployed (outcome = zero)
 smodel = coxph(Surv(time, outcome==0) ~ I(funded=='Funded') + cluster(number), data = analysis_ready_employment)
 ests = tidy(smodel, conf.int=TRUE, exponentiate = TRUE) %>%
-  select(term, estimate, conf.low, conf.high)
+  dplyr::select(term, estimate, conf.low, conf.high)
 ests$term = 'Funded'
 ftab = flextable(ests) %>%
   theme_box() %>%

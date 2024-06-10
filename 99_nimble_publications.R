@@ -73,7 +73,8 @@ matrix_baseline = dplyr::select(analysis_ready_imputed[[imp]], b_scholar, b_scop
          b_scopus = b_scopus + 0.5,
          b_researchgate = b_researchgate + 0.5) %>% # because of zero
   as.matrix() %>%
-  log2() # transform
+  log() # alternative transform for reviewer (Dec 2023)
+#  log2() # transform
 # centre baseline counts for better convergence
 library(matrixStats)
 median.baseline = colMedians(matrix_baseline, na.rm=TRUE)
