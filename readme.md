@@ -1,10 +1,10 @@
 # Health Research Council of New Zealand trial of randomised funding
 
-R code to run the analysis of a randomised trial of funding. The R files are numbered in running order, with files starting with “0” for data reading, through to files starting with “5” for the analysis and presentation. The Bayesian models were run using the nimble package.
+This repository contains the R code to gather the data and run the analysis of a randomised trial of funding. The R files are numbered in running order, with files starting with “0” for data reading, through to files starting with “5” for the analysis and presentation. The Bayesian models were run using the nimble package. A key file is the Rmarkdown file `5_main_analysis.Rmd`.
 
 The data cannot be shared publicly as we consented applicants on the understanding that their data would not be shared with other researchers.
 
-The folder `simulation` contains the code to run a simulation that compares two study design: regression dicontinuity and a randomised controlled trial.
+The folder `simulation` contains the code to run a simulation that compares two study designs on the impact of research funding: regression dicontinuity and a randomised controlled trial.
 
 ### Version information
 
